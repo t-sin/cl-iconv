@@ -12,6 +12,12 @@
 
 (in-package :iconv)
 
+;;; errno
+(cffi:defcvar "errno" :int)
+(defvar +e2big+ 7)
+(defvar +einval+ 22)
+(defvar +eilseq+ 84)
+
 (defvar *report-bytes-count* 10
   "The number of bytes that will be reported when displaying an error.")
 
@@ -55,9 +61,6 @@ Previous ~a bytes leading up to this error: ~s"
                        index (iconv-invalid-multibyte-at-end-p condition) (- index l) (subseq buf l)))))
   (:documentation "Error that is raised when conversion encounters an illegal multibyte sequence"))
 
-(defun get-errno ()
-  (iolib.syscalls:errno))
-
 (cffi:defcfun ("iconv_open" %iconv-open) :pointer
   (tocode :string)
   (fromcode :string))
@@ -76,7 +79,7 @@ Previous ~a bytes leading up to this error: ~s"
   (let ((result (%iconv-open tocode fromcode)))
     (when (= (cffi:pointer-address result)
              (1- (ash 1 (* (cffi:foreign-type-size :pointer) 8))))
-      (if (= (get-errno) iolib.syscalls:einval)
+      (if (= *errno* +einval+)
           (error 'iconv-unknown-encoding-error)
           (error 'iconv-open-error)))
     result))
@@ -147,7 +150,7 @@ Previous ~a bytes leading up to this error: ~s"
                    (let* ((remaining (cffi:mem-ref inbytesleft :unsigned-long)))
                      (setq delta (min delta remaining))
                      (setf (cffi:mem-ref in-ptr :pointer)
-                           (cffi-sys:make-pointer (+ (cffi-sys:pointer-address (cffi:mem-ref in-ptr :pointer)) delta)))
+                           (cffi-sys:make-pointer (+ (cffi-sys:pointer-address (cffi:mem-ref qin-ptr :pointer)) delta)))
                      (setf (cffi:mem-ref inbytesleft :unsigned-long) (- remaining delta))))
 
                  (read-next-part ()
@@ -158,16 +161,18 @@ Previous ~a bytes leading up to this error: ~s"
                                           out-ptr
                                           outbytesleft)))
                          (when (= ret +error-return+)
-                           (let ((errno (get-errno)))
-                             (cond ((= errno iolib.syscalls:e2big)
+                           (let ((errno *errno*))
+                             (format t "errno: ~a~%eilseq: ~a~%=: ~a~%"
+                                     errno +eilseq+ (= errno +eilseq+))
+                             (cond ((= errno +e2big+)
                                     (copy-to-out-and-clear-out-buffer))
-                                   ((= errno iolib.syscalls:eilseq)
+                                   ((= errno +eilseq+)
                                     (copy-to-out-and-clear-out-buffer)
                                     (error 'iconv-invalid-multibyte
                                            :buffer inbuffer
                                            :index (current)
                                            :at-end-p nil))
-                                   ((= errno iolib.syscalls:einval)
+                                   ((= errno +einval+)
                                     (copy-to-out-and-clear-out-buffer)
                                     (setq end t)
                                     (error 'iconv-invalid-multibyte
